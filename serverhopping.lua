@@ -1,17 +1,15 @@
--- Pastikan game sudah selesai load
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
--- Jeda 20 detik setelah auto-execute
 task.wait(20)
 
-local Players          = game:GetService("Players")
-local TeleportService  = game:GetService("TeleportService")
-local HttpService      = game:GetService("HttpService")
+local Players         = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService     = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
-local placeId     = game.PlaceId
+local placeId     = game.PlaceId         -- ⬅ pakai place yang sedang dimainkan
 local currentJobId = game.JobId
 
 --------------------------------------------------------------------
@@ -20,10 +18,11 @@ local currentJobId = game.JobId
 local MIN_PLAYERS = 7          -- minimal pemain di server tujuan
 local MAX_PLAYERS = 15         -- maksimal pemain di server tujuan
 local MAX_PAGES   = 5          -- maksimal halaman server yang dicek
+local MAX_TRIES   = 3          -- maksimal percobaan teleport ke server berbeda
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
--- 🔹 Load daftar teman (UserId)
+-- 📜 LOAD DAFTAR TEMAN
 --------------------------------------------------------------------
 local FriendIds = {}
 
@@ -57,19 +56,19 @@ end
 
 local hasFriend, friendName = HasFriendInCurrentServer()
 if hasFriend then
-    warn("[ServerHop] Ada teman di server ini:", friendName, "→ akan hop ke server lain.")
+    warn("[ServerHop] Ada teman di server ini:", friendName, "→ akan cari server lain.")
 else
     print("[ServerHop] Tidak ada teman di server ini.")
 end
 
 --------------------------------------------------------------------
--- 🔹 Ambil list server dari API Roblox
+-- 🌐 AMBIL LIST SERVER DARI API ROBLOX
 --------------------------------------------------------------------
 local cursor = nil
 
 local function GetServers()
-    -- Pakai placeId dari game yang sedang kamu mainkan
-    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(placeId)
+    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100")
+        :format(placeId)      -- ⬅ TIDAK lagi hardcode
 
     if cursor then
         url = url .. "&cursor=" .. cursor
@@ -98,17 +97,14 @@ local function GetServers()
     return decoded.data
 end
 
-print(("[ServerHop] Mencari server lain... (min %d, max %d pemain)"):format(MIN_PLAYERS, MAX_PLAYERS))
-print("[ServerHop] Server saat ini JobId:", currentJobId)
+print(("[ServerHop] Cari server lain... (min %d, max %d pemain)")
+    :format(MIN_PLAYERS, MAX_PLAYERS))
+print("[ServerHop] Server sekarang JobId:", currentJobId)
 
 --------------------------------------------------------------------
--- 🔹 Cari server yang:
---     - tidak penuh
---     - beda JobId (bukan server yang sama)
---     - jumlah pemain antara 7–15
+-- 🔎 KUMPULKAN KANDIDAT SERVER YANG COCOK
 --------------------------------------------------------------------
-local foundServer
-local foundPlayerCount
+local candidateServers = {}
 
 for page = 1, MAX_PAGES do
     local servers = GetServers()
@@ -127,37 +123,58 @@ for page = 1, MAX_PAGES do
         local notTooMany      = server.playing <= MAX_PLAYERS
 
         if notFull and differentServer and enoughPlayers and notTooMany then
-            foundServer      = server.id
-            foundPlayerCount = server.playing
-            print("[ServerHop] Server cocok ditemukan:", foundServer,
-                  "| pemain:", server.playing, "/", server.maxPlayers)
-            break
+            table.insert(candidateServers, {
+                id      = server.id,
+                playing = server.playing,
+                max     = server.maxPlayers,
+            })
         end
     end
 
-    if foundServer or not cursor then
+    if not cursor then
         break
     end
 end
 
+if #candidateServers == 0 then
+    warn("[ServerHop] Tidak ada server yang memenuhi syarat (7–15 pemain & beda JobId).")
+    return
+end
+
 --------------------------------------------------------------------
--- 🔹 Teleport & handle error (termasuk kode 773)
+-- 🚀 COBA TELEPORT KE BEBERAPA KANDIDAT, HANDLE ERROR 773
 --------------------------------------------------------------------
-if foundServer then
-    print("[ServerHop] Teleport ke server:", foundServer)
+local tries = 0
+
+for _, server in ipairs(candidateServers) do
+    if tries >= MAX_TRIES then
+        warn("[ServerHop] Sudah mencapai batas percobaan teleport.")
+        break
+    end
+
+    tries = tries + 1
+
+    print(("[ServerHop] Percobaan %d: teleport ke %s (%d/%d pemain)")
+        :format(tries, server.id, server.playing, server.max))
+
     local okTp, tpErr = pcall(function()
-        TeleportService:TeleportToPlaceInstance(placeId, foundServer)
+        TeleportService:TeleportToPlaceInstance(placeId, server.id)
     end)
 
     if not okTp then
-        warn("[ServerHop] Teleport gagal:", tpErr)
-
-        -- Deteksi error 773 (tempat dibatasi)
         local errStr = tostring(tpErr)
+        warn("[ServerHop] Teleport gagal:", errStr)
+
         if errStr:find("773") or errStr:lower():find("restricted") then
-            warn("[ServerHop] Error 773 (tempat dibatasi). Ini batasan dari Roblox, tidak bisa di-bypass dari script.")
+            warn("[ServerHop] Error 773 (tempat / server dibatasi oleh Roblox). " ..
+                 "Script tidak bisa memaksa masuk. Coba server lain.")
+            -- lanjut ke server kandidat berikutnya
+        else
+            -- error lain (misal disconnect), kita juga lanjut ke kandidat lain
+            warn("[ServerHop] Bukan 773, lanjut coba server lain.")
         end
+    else
+        print("[ServerHop] Teleport berhasil dipanggil, menunggu pindah server...")
+        break -- biasanya setelah ini script berhenti karena pindah place
     end
-else
-    warn("[ServerHop] Tidak menemukan server lain yang cocok. Coba rejoin biasa.")
 end
