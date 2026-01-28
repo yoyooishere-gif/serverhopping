@@ -15,7 +15,7 @@ local currentJobId = game.JobId
 --------------------------------------------------------------------
 -- 🔧 KONFIGURASI
 --------------------------------------------------------------------
-local MIN_PLAYERS = 7          -- minimal pemain di server tujuan
+local MIN_PLAYERS = 1          -- minimal pemain di server tujuan
 local MAX_PLAYERS = 15         -- maksimal pemain di server tujuan
 local MAX_PAGES   = 5          -- maksimal halaman server yang dicek
 local MAX_TRIES   = 3          -- maksimal percobaan teleport ke server berbeda
@@ -178,3 +178,4 @@ for _, server in ipairs(candidateServers) do
         break -- biasanya setelah ini script berhenti karena pindah place
     end
 end
+
