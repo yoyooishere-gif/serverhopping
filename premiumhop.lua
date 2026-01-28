@@ -197,49 +197,66 @@ print(("[ServerHop] Target server: %d–%d pemain"):format(CONFIG.MinPlayers, CO
 --     - jumlah pemain di range
 --     - belum pernah dikunjungi (kalau RememberVisited = true)
 ----------------------------------------------------------------
+----------------------------------------------------------------
+-- 🔎 2-PHASE SERVER SCAN (STRICT 7–15 PLAYER)
+----------------------------------------------------------------
 local candidates = {}
-local backups    = {}  -- server yang tidak masuk range player tapi bisa join
 
-for page = 1, CONFIG.MaxPagesToScan do
-    local servers = GetServers()
-    if not servers then break end
+-- helper: scan beberapa page
+local function ScanPages(pageCount)
+    for page = 1, pageCount do
+        local servers = GetServers()
+        if not servers then return end
 
-    for _, server in ipairs(servers) do
-        local sid       = server.id
-        local playing   = server.playing
-        local maxPlr    = server.maxPlayers
+        for _, server in ipairs(servers) do
+            local sid     = server.id
+            local playing = server.playing
+            local maxPlr  = server.maxPlayers
 
-        local notFull   = playing < maxPlr
-        local inRange   = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
-        local notVisited = (not CONFIG.RememberVisited) or (not visited[sid])
+            local notFull    = playing < maxPlr
+            local inRange    = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
+            local notVisited = (not CONFIG.RememberVisited) or (not visited[sid])
 
-        if notFull and notVisited then
-            local info = {
-                id      = sid,
-                playing = playing,
-                max     = maxPlr,
-                score   = 0,
-            }
+            if notFull and inRange and notVisited then
+                local mid  = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
+                local dist = math.abs(playing - mid)
 
-            -- Skor: makin dekat ke tengah range, makin bagus
-            local mid = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
-            local dist = math.abs(playing - mid)
-            info.score = -dist + math.random()  -- sedikit random biar variatif
-
-            if inRange then
-                table.insert(candidates, info)
-            else
-                table.insert(backups, info)
+                table.insert(candidates, {
+                    id      = sid,
+                    playing = playing,
+                    max     = maxPlr,
+                    score   = -dist + math.random(),
+                })
             end
         end
-    end
 
-    if not cursor then
-        break
+        if not cursor then return end
     end
 end
 
--- Fungsi pilih server dengan score terbaik dari list
+----------------------------------------------------------------
+-- PHASE 1: QUICK SCAN (PAGE BAWAH)
+----------------------------------------------------------------
+ScanPages(5)
+
+----------------------------------------------------------------
+-- PHASE 2: DEEP RANDOM JUMP + SCAN
+----------------------------------------------------------------
+if #candidates == 0 then
+    local jumpPages = math.random(10, 30)  -- lompat jauh
+    print("[ServerHop] Deep jump ke page:", jumpPages)
+
+    for i = 1, jumpPages do
+        local _ = GetServers()
+        if not cursor then break end
+    end
+
+    ScanPages(10)
+end
+
+----------------------------------------------------------------
+-- PILIH SERVER TERBAIK
+----------------------------------------------------------------
 local function pickBest(list)
     if #list == 0 then return nil end
     local best = list[1]
@@ -254,14 +271,9 @@ end
 local target = pickBest(candidates)
 
 if not target then
-    if #backups > 0 then
-        warn("[ServerHop] Tidak ada server pas 7–15 pemain, pakai server cadangan.")
-        target = pickBest(backups)
-    else
-        warn("[ServerHop] Tidak ada server lain yang bisa dimasuki (advanced). Rejoin biasa.")
-        SimpleRejoin()
-        return
-    end
+    warn("[ServerHop] STRICT MODE: Tidak ada server "
+        .. CONFIG.MinPlayers .. "–" .. CONFIG.MaxPlayers .. " pemain.")
+    return
 end
 
 ----------------------------------------------------------------
@@ -287,6 +299,7 @@ if not okTp then
              "Ini batas server, bukan script. Coba lagi nanti atau ganti game.")
     end
 end
+
 
 
 
