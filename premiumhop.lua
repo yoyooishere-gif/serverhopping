@@ -7,7 +7,7 @@ end
 -- Konfigurasi umum
 local CONFIG = {
     DelayBeforeStart   = 15,   -- jeda sebelum mulai hop (detik)
-    MinPlayers         = 4,    -- minimal pemain di server tujuan
+    MinPlayers         = 8,    -- minimal pemain di server tujuan
     MaxPlayers         = 15,   -- maksimal pemain di server tujuan
     MaxPagesToScan     = 6,    -- maksimal halaman server yang discan
     RandomStartPage    = true, -- mulai dari page acak
@@ -287,6 +287,7 @@ if not okTp then
              "Ini batas server, bukan script. Coba lagi nanti atau ganti game.")
     end
 end
+
 
 
 
