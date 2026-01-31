@@ -1,4 +1,4 @@
---==[ ADVANCED SERVER HOPPER – ANTI 429 + LAST RESORT NO SOLO ]==--
+--==[ ADVANCED SERVER HOPPER – ANTI 429 + LAST RESORT ]==--
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -21,7 +21,7 @@ local CONFIG = {
     RememberVisited       = true,-- ingat server yang sudah dikunjungi
     ResetVisitedAfter     = 150, -- kalau visited > ini, reset list
 
-    LastResortAvoidSolo   = true,-- last resort tetap menghindari 1 pemain kalau bisa
+    LastResortAvoidSolo   = true,-- last resort tetap menghindari server 1 pemain kalau bisa
 }
 
 task.wait(CONFIG.DelayBeforeStart)
@@ -201,7 +201,7 @@ if CONFIG.RandomStartPage then
 
     for _ = 1, skipPages do
         local servers = GetServers()
-        if not servers or not cursor then break end
+        if not servers or not cursor or RATE_LIMITED then break end
     end
 
     print("[ServerHop] Mulai scan dari page acak, skip halaman:", skipPages)
@@ -301,7 +301,14 @@ if not target then
             warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak (last resort, bisa solo).")
             target = anyServers[math.random(1, #anyServers)]
         else
-            warn("[ServerHop] Hanya ada 1 server publik (server ini). Tidak bisa hop ke server lain.")
+            -- 🔴 kasus: server list kosong (biasanya 429 parah)
+            if RATE_LIMITED then
+                warn("[ServerHop] Kena HTTP 429, server list kosong. Rejoin random (Roblox yang pilih server).")
+            else
+                warn("[ServerHop] Server list kosong / hanya berisi server ini. Rejoin random (Roblox yang pilih server).")
+            end
+
+            SimpleRejoin()
             return
         end
     end
@@ -323,7 +330,6 @@ end)
 
 if not okTp then
     local errStr = tostring(tpErr)
-    -- error IsTeleporting sering muncul ketika teleport sedang proses, bisa diabaikan
     if errStr:find("IsTeleporting") then
         warn("[ServerHop] Teleport sedang diproses Roblox (IsTeleporting), abaikan error ini.")
         return
