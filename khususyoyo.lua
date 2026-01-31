@@ -1,4 +1,4 @@
---==[ ADVANCED SERVER HOPPER – LAST RESORT RANDOM HOP ]==--
+--==[ ADVANCED SERVER HOPPER – ANTI 429 + LAST RESORT NO SOLO ]==--
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -6,20 +6,22 @@ end
 
 -- Konfigurasi umum
 local CONFIG = {
-    DelayBeforeStart   = 8,   -- jeda sebelum mulai hop (detik)
+    DelayBeforeStart      = 8,   -- jeda sebelum mulai hop (detik)
 
     -- RANGE UTAMA
-    MinPlayers         = 3,   -- minimal pemain di server tujuan
-    MaxPlayers         = 7,   -- maksimal pemain di server tujuan
+    MinPlayers            = 3,   -- minimal pemain di server tujuan
+    MaxPlayers            = 7,   -- maksimal pemain di server tujuan
 
-    -- RANGE CADANGAN (kalau tidak ada yang masuk range utama)
-    BackupMinPlayers   = 2,   -- server cadangan minimal 2 pemain (tidak 1 pemain)
+    -- RANGE CADANGAN
+    BackupMinPlayers      = 2,   -- server cadangan minimal 2 pemain (tidak 1 pemain)
 
-    MaxPagesToScan     = 6,   -- maksimal halaman server yang discan
-    RandomStartPage    = true,-- mulai dari page acak
-    UseAntiFriend      = true,-- cek teman di server sekarang
-    RememberVisited    = true,-- ingat server yang sudah dikunjungi
-    ResetVisitedAfter  = 150, -- kalau visited > ini, reset list
+    MaxPagesToScan        = 6,   -- maksimal halaman server yang discan
+    RandomStartPage       = true,-- mulai dari page acak
+    UseAntiFriend         = true,-- cek teman di server sekarang
+    RememberVisited       = true,-- ingat server yang sudah dikunjungi
+    ResetVisitedAfter     = 150, -- kalau visited > ini, reset list
+
+    LastResortAvoidSolo   = true,-- last resort tetap menghindari 1 pemain kalau bisa
 }
 
 task.wait(CONFIG.DelayBeforeStart)
@@ -35,7 +37,7 @@ local currentJob  = game.JobId
 math.randomseed(os.time())
 
 ----------------------------------------------------------------
--- 🔁 GLOBAL visited server list (supaya ingat lewat teleport)
+-- 🔁 GLOBAL visited server list
 ----------------------------------------------------------------
 local env = getgenv and getgenv() or _G
 env.AdvServerHopVisited = env.AdvServerHopVisited or {}
@@ -149,8 +151,11 @@ end
 -- 📄 Ambil server list (Advanced mode)
 ----------------------------------------------------------------
 local cursor = nil
+local RATE_LIMITED = false  -- kalau kena 429 kita tandai
 
 local function GetServers()
+    if RATE_LIMITED then return nil end -- sudah 429, jangan spam lagi
+
     local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100")
         :format(placeId)
 
@@ -163,7 +168,13 @@ local function GetServers()
     end)
 
     if not ok then
-        warn("[ServerHop] Gagal ambil server list:", result)
+        local msg = tostring(result)
+        if msg:find("429") then
+            RATE_LIMITED = true
+            warn("[ServerHop] Gagal ambil server list: HTTP 429 (Too Many Requests. Retry later)")
+        else
+            warn("[ServerHop] Gagal ambil server list:", msg)
+        end
         return nil
     end
 
@@ -201,9 +212,10 @@ print(("[ServerHop] Target server: %d–%d pemain"):format(CONFIG.MinPlayers, CO
 ----------------------------------------------------------------
 -- 🔎 Kumpulkan kandidat server
 ----------------------------------------------------------------
-local candidates = {}  -- sesuai range utama
-local backups    = {}  -- minimal BackupMinPlayers
-local anyServers = {}  -- last resort: server apa saja selain JobId sekarang
+local candidates = {}   -- sesuai range utama
+local backups    = {}   -- minimal BackupMinPlayers
+local anyServers = {}   -- last resort: server apa saja selain JobId sekarang
+local anyNonSolo = {}   -- last resort tapi minimal 2 pemain
 
 local function pickBest(list)
     if #list == 0 then return nil end
@@ -225,17 +237,20 @@ for page = 1, CONFIG.MaxPagesToScan do
         local playing   = server.playing
         local maxPlr    = server.maxPlayers
 
-        -- kumpulkan semua server (selama bukan jobid yang sama) untuk last resort
         if sid ~= currentJob then
-            table.insert(anyServers, {
+            -- kumpulkan semua server untuk last resort
+            local anyInfo = {
                 id      = sid,
                 playing = playing,
                 max     = maxPlr,
-                score   = math.random(), -- random saja untuk last resort
-            })
+                score   = math.random(),
+            }
+            table.insert(anyServers, anyInfo)
+            if playing >= 2 then
+                table.insert(anyNonSolo, anyInfo)
+            end
         end
 
-        -- filter untuk kandidat utama + cadangan
         local notFull       = playing < maxPlr
         local inMainRange   = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
         local inBackupRange = playing >= CONFIG.BackupMinPlayers
@@ -262,7 +277,7 @@ for page = 1, CONFIG.MaxPagesToScan do
         end
     end
 
-    if not cursor then
+    if not cursor or RATE_LIMITED then
         break
     end
 end
@@ -278,10 +293,12 @@ if not target then
             :format(CONFIG.MinPlayers, CONFIG.MaxPlayers, CONFIG.BackupMinPlayers))
         target = pickBest(backups)
     else
-        -- LAST RESORT: pilih server sembarang (asal bukan jobid sekarang)
-        if #anyServers > 0 then
-            warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak (last resort).")
-            -- bisa pakai pickBest(anyServers) atau cuma random
+        -- LAST RESORT
+        if CONFIG.LastResortAvoidSolo and #anyNonSolo > 0 then
+            warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak non-solo (last resort).")
+            target = anyNonSolo[math.random(1, #anyNonSolo)]
+        elseif #anyServers > 0 then
+            warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak (last resort, bisa solo).")
             target = anyServers[math.random(1, #anyServers)]
         else
             warn("[ServerHop] Hanya ada 1 server publik (server ini). Tidak bisa hop ke server lain.")
@@ -306,6 +323,12 @@ end)
 
 if not okTp then
     local errStr = tostring(tpErr)
+    -- error IsTeleporting sering muncul ketika teleport sedang proses, bisa diabaikan
+    if errStr:find("IsTeleporting") then
+        warn("[ServerHop] Teleport sedang diproses Roblox (IsTeleporting), abaikan error ini.")
+        return
+    end
+
     warn("[ServerHop] Teleport gagal:", errStr)
 
     if errStr:find("773") or errStr:lower():find("restricted") then
