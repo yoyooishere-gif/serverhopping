@@ -1,4 +1,4 @@
---==[ ADVANCED SERVER HOPPER ]==--
+--==[ ADVANCED SERVER HOPPER – FIX BACKUP & AVOID SAME SERVER ]==--
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -7,13 +7,19 @@ end
 -- Konfigurasi umum
 local CONFIG = {
     DelayBeforeStart   = 8,   -- jeda sebelum mulai hop (detik)
-    MinPlayers         = 3,    -- minimal pemain di server tujuan
+
+    -- RANGE UTAMA (server yang diinginkan)
+    MinPlayers         = 3,   -- minimal pemain di server tujuan
     MaxPlayers         = 7,   -- maksimal pemain di server tujuan
-    MaxPagesToScan     = 6,    -- maksimal halaman server yang discan
-    RandomStartPage    = true, -- mulai dari page acak
-    UseAntiFriend      = true, -- cek teman di server sekarang
-    RememberVisited    = true, -- ingat server yang sudah dikunjungi
-    ResetVisitedAfter  = 150,  -- kalau visited > ini, reset list
+
+    -- RANGE CADANGAN (kalau tidak ada yang masuk range utama)
+    BackupMinPlayers   = 2,   -- minimal pemain untuk server cadangan (TIDAK AKAN pilih 1 pemain)
+
+    MaxPagesToScan     = 6,   -- maksimal halaman server yang discan
+    RandomStartPage    = true,-- mulai dari page acak
+    UseAntiFriend      = true,-- cek teman di server sekarang
+    RememberVisited    = true,-- ingat server yang sudah dikunjungi
+    ResetVisitedAfter  = 150, -- kalau visited > ini, reset list
 }
 
 task.wait(CONFIG.DelayBeforeStart)
@@ -24,6 +30,7 @@ local HttpService     = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local placeId     = game.PlaceId
+local currentJob  = game.JobId
 
 math.randomseed(os.time())
 
@@ -181,7 +188,7 @@ if CONFIG.RandomStartPage then
     local maxSkip = math.max(0, CONFIG.MaxPagesToScan - 1)
     local skipPages = math.random(0, maxSkip)
 
-    for i = 1, skipPages do
+    for _ = 1, skipPages do
         local servers = GetServers()
         if not servers or not cursor then break end
     end
@@ -189,57 +196,15 @@ if CONFIG.RandomStartPage then
     print("[ServerHop] Mulai scan dari page acak, skip halaman:", skipPages)
 end
 
-print(("[ServerHop] Target server: %d–%d pemain"):format(CONFIG.MinPlayers, CONFIG.MaxPlayers))
+print(("[ServerHop] Target server utama: %d–%d pemain"):format(CONFIG.MinPlayers, CONFIG.MaxPlayers))
 
 ----------------------------------------------------------------
 -- 🔎 Kumpulkan kandidat server
---     - tidak penuh
---     - jumlah pemain di range
---     - belum pernah dikunjungi (kalau RememberVisited = true)
 ----------------------------------------------------------------
 local candidates = {}
-local backups    = {}  -- server yang tidak masuk range player tapi bisa join
+local backups    = {}
 
-for page = 1, CONFIG.MaxPagesToScan do
-    local servers = GetServers()
-    if not servers then break end
-
-    for _, server in ipairs(servers) do
-        local sid       = server.id
-        local playing   = server.playing
-        local maxPlr    = server.maxPlayers
-
-        local notFull   = playing < maxPlr
-        local inRange   = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
-        local notVisited = (not CONFIG.RememberVisited) or (not visited[sid])
-
-        if notFull and notVisited then
-            local info = {
-                id      = sid,
-                playing = playing,
-                max     = maxPlr,
-                score   = 0,
-            }
-
-            -- Skor: makin dekat ke tengah range, makin bagus
-            local mid = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
-            local dist = math.abs(playing - mid)
-            info.score = -dist + math.random()  -- sedikit random biar variatif
-
-            if inRange then
-                table.insert(candidates, info)
-            else
-                table.insert(backups, info)
-            end
-        end
-    end
-
-    if not cursor then
-        break
-    end
-end
-
--- Fungsi pilih server dengan score terbaik dari list
+-- helper pilih server dengan score terbaik
 local function pickBest(list)
     if #list == 0 then return nil end
     local best = list[1]
@@ -251,11 +216,58 @@ local function pickBest(list)
     return best
 end
 
+for page = 1, CONFIG.MaxPagesToScan do
+    local servers = GetServers()
+    if not servers then break end
+
+    for _, server in ipairs(servers) do
+        local sid       = server.id
+        local playing   = server.playing
+        local maxPlr    = server.maxPlayers
+
+        -- ❗️JANGAN pilih server sendiri
+        if sid ~= currentJob then
+            local notFull    = playing < maxPlr
+            local inMain     = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
+            local inBackup   = playing >= CONFIG.BackupMinPlayers  -- minimal 2 pemain
+            local notVisited = (not CONFIG.RememberVisited) or (not visited[sid])
+
+            if notFull and notVisited then
+                local info = {
+                    id      = sid,
+                    playing = playing,
+                    max     = maxPlr,
+                    score   = 0,
+                }
+
+                -- Skor: makin dekat ke tengah range utama, makin bagus
+                local mid = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
+                local dist = math.abs(playing - mid)
+                info.score = -dist + math.random()
+
+                if inMain then
+                    table.insert(candidates, info)
+                elseif inBackup then
+                    table.insert(backups, info)
+                end
+            end
+        end
+    end
+
+    if not cursor then
+        break
+    end
+end
+
+----------------------------------------------------------------
+-- 🎯 Pilih server target
+----------------------------------------------------------------
 local target = pickBest(candidates)
 
 if not target then
     if #backups > 0 then
-        warn("[ServerHop] Tidak ada server pas 7–15 pemain, pakai server cadangan.")
+        warn(("[ServerHop] Tidak ada server %d–%d pemain, pakai server cadangan (≥%d pemain).")
+            :format(CONFIG.MinPlayers, CONFIG.MaxPlayers, CONFIG.BackupMinPlayers))
         target = pickBest(backups)
     else
         warn("[ServerHop] Tidak ada server lain yang bisa dimasuki (advanced). Rejoin biasa.")
@@ -287,13 +299,3 @@ if not okTp then
              "Ini batas server, bukan script. Coba lagi nanti atau ganti game.")
     end
 end
-
-
-
-
-
-
-
-
-
-
