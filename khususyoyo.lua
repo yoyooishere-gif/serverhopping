@@ -1,4 +1,4 @@
---==[ ADVANCED SERVER HOPPER – ANTI 429 + LAST RESORT ]==--
+--==[ ADVANCED SERVER HOPPER – MID TRAFFIC + FALLBACK RANDOM LIKE PLAY ]==--
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -8,20 +8,18 @@ end
 local CONFIG = {
     DelayBeforeStart      = 8,   -- jeda sebelum mulai hop (detik)
 
-    -- RANGE UTAMA
+    -- RANGE UTAMA (server ideal)
     MinPlayers            = 3,   -- minimal pemain di server tujuan
     MaxPlayers            = 7,   -- maksimal pemain di server tujuan
 
-    -- RANGE CADANGAN
-    BackupMinPlayers      = 2,   -- server cadangan minimal 2 pemain (tidak 1 pemain)
+    -- RANGE CADANGAN (kalau tidak ada yang masuk range utama)
+    BackupMinPlayers      = 2,   -- minimal pemain untuk server cadangan (tidak 1 pemain)
 
     MaxPagesToScan        = 6,   -- maksimal halaman server yang discan
     RandomStartPage       = true,-- mulai dari page acak
     UseAntiFriend         = true,-- cek teman di server sekarang
     RememberVisited       = true,-- ingat server yang sudah dikunjungi
     ResetVisitedAfter     = 150, -- kalau visited > ini, reset list
-
-    LastResortAvoidSolo   = true,-- last resort tetap menghindari server 1 pemain kalau bisa
 }
 
 task.wait(CONFIG.DelayBeforeStart)
@@ -117,7 +115,7 @@ do
     if not ok then
         HTTP_OK = false
         warn("[ServerHop] HTTP ke games.roblox.com diblokir oleh executor / device.")
-        warn("[ServerHop] Mode simple saja (tanpa server list).")
+        warn("[ServerHop] Pakai mode random seperti tombol Play.")
     else
         local okDecode = pcall(function()
             HttpService:JSONDecode(res)
@@ -130,20 +128,21 @@ do
 end
 
 ----------------------------------------------------------------
--- 🪂 Mode simple (kalau HTTP tidak bisa sama sekali)
+-- 🪂 Mode random (seperti start game biasa)
 ----------------------------------------------------------------
-local function SimpleRejoin()
-    warn("[ServerHop] Mode simple aktif (tanpa server list). Rejoin place saja.")
+local function RandomRejoin()
+    warn("[ServerHop] Mode random aktif (tanpa server list). Roblox yang pilih server.")
     local okTp, err = pcall(function()
+        -- seperti klik tombol Play: biar Roblox pilih server
         TeleportService:Teleport(placeId, LocalPlayer)
     end)
     if not okTp then
-        warn("[ServerHop] Teleport simple gagal:", err)
+        warn("[ServerHop] Teleport random gagal:", err)
     end
 end
 
 if not HTTP_OK then
-    SimpleRejoin()
+    RandomRejoin()
     return
 end
 
@@ -214,8 +213,6 @@ print(("[ServerHop] Target server: %d–%d pemain"):format(CONFIG.MinPlayers, CO
 ----------------------------------------------------------------
 local candidates = {}   -- sesuai range utama
 local backups    = {}   -- minimal BackupMinPlayers
-local anyServers = {}   -- last resort: server apa saja selain JobId sekarang
-local anyNonSolo = {}   -- last resort tapi minimal 2 pemain
 
 local function pickBest(list)
     if #list == 0 then return nil end
@@ -237,20 +234,6 @@ for page = 1, CONFIG.MaxPagesToScan do
         local playing   = server.playing
         local maxPlr    = server.maxPlayers
 
-        if sid ~= currentJob then
-            -- kumpulkan semua server untuk last resort
-            local anyInfo = {
-                id      = sid,
-                playing = playing,
-                max     = maxPlr,
-                score   = math.random(),
-            }
-            table.insert(anyServers, anyInfo)
-            if playing >= 2 then
-                table.insert(anyNonSolo, anyInfo)
-            end
-        end
-
         local notFull       = playing < maxPlr
         local inMainRange   = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
         local inBackupRange = playing >= CONFIG.BackupMinPlayers
@@ -265,6 +248,7 @@ for page = 1, CONFIG.MaxPagesToScan do
                 score   = 0,
             }
 
+            -- makin dekat ke tengah range, makin bagus
             local mid  = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
             local dist = math.abs(playing - mid)
             info.score = -dist + math.random()
@@ -289,28 +273,18 @@ local target = pickBest(candidates)
 
 if not target then
     if #backups > 0 then
-        warn(("[ServerHop] Tidak ada server pas %d–%d pemain, pakai server cadangan (≥%d pemain).")
+        warn(("[ServerHop] Tidak ada server %d–%d pemain, pakai server cadangan (≥%d pemain).")
             :format(CONFIG.MinPlayers, CONFIG.MaxPlayers, CONFIG.BackupMinPlayers))
         target = pickBest(backups)
     else
-        -- LAST RESORT
-        if CONFIG.LastResortAvoidSolo and #anyNonSolo > 0 then
-            warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak non-solo (last resort).")
-            target = anyNonSolo[math.random(1, #anyNonSolo)]
-        elseif #anyServers > 0 then
-            warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak (last resort, bisa solo).")
-            target = anyServers[math.random(1, #anyServers)]
+        -- Tidak ada kandidat sama sekali → pakai mode random seperti start game
+        if RATE_LIMITED then
+            warn("[ServerHop] Server list gagal / 429. Pindah ke mode random (Roblox yang pilih server).")
         else
-            -- 🔴 kasus: server list kosong (biasanya 429 parah)
-            if RATE_LIMITED then
-                warn("[ServerHop] Kena HTTP 429, server list kosong. Rejoin random (Roblox yang pilih server).")
-            else
-                warn("[ServerHop] Server list kosong / hanya berisi server ini. Rejoin random (Roblox yang pilih server).")
-            end
-
-            SimpleRejoin()
-            return
+            warn("[ServerHop] Tidak ada server yang cocok. Pindah ke mode random (Roblox yang pilih server).")
         end
+        RandomRejoin()
+        return
     end
 end
 
