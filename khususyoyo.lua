@@ -1,4 +1,4 @@
---==[ ADVANCED SERVER HOPPER – FIX BACKUP & AVOID SAME SERVER ]==--
+--==[ ADVANCED SERVER HOPPER – NO 1 PLAYER BACKUP ]==--
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -8,12 +8,12 @@ end
 local CONFIG = {
     DelayBeforeStart   = 8,   -- jeda sebelum mulai hop (detik)
 
-    -- RANGE UTAMA (server yang diinginkan)
+    -- RANGE UTAMA
     MinPlayers         = 3,   -- minimal pemain di server tujuan
     MaxPlayers         = 7,   -- maksimal pemain di server tujuan
 
     -- RANGE CADANGAN (kalau tidak ada yang masuk range utama)
-    BackupMinPlayers   = 2,   -- minimal pemain untuk server cadangan (TIDAK AKAN pilih 1 pemain)
+    BackupMinPlayers   = 2,   -- server cadangan minimal 2 pemain (tidak akan 1 pemain)
 
     MaxPagesToScan     = 6,   -- maksimal halaman server yang discan
     RandomStartPage    = true,-- mulai dari page acak
@@ -30,7 +30,7 @@ local HttpService     = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local placeId     = game.PlaceId
-local currentJob  = game.JobId
+local currentJob  = game.JobId   -- <== BIAR NGGAK PILIH SERVER YANG SAMA
 
 math.randomseed(os.time())
 
@@ -196,15 +196,18 @@ if CONFIG.RandomStartPage then
     print("[ServerHop] Mulai scan dari page acak, skip halaman:", skipPages)
 end
 
-print(("[ServerHop] Target server utama: %d–%d pemain"):format(CONFIG.MinPlayers, CONFIG.MaxPlayers))
+print(("[ServerHop] Target server: %d–%d pemain"):format(CONFIG.MinPlayers, CONFIG.MaxPlayers))
 
 ----------------------------------------------------------------
 -- 🔎 Kumpulkan kandidat server
+--     - tidak penuh
+--     - jumlah pemain di range
+--     - belum pernah dikunjungi
+--     - BUKAN JobId server sekarang
 ----------------------------------------------------------------
 local candidates = {}
 local backups    = {}
 
--- helper pilih server dengan score terbaik
 local function pickBest(list)
     if #list == 0 then return nil end
     local best = list[1]
@@ -225,31 +228,28 @@ for page = 1, CONFIG.MaxPagesToScan do
         local playing   = server.playing
         local maxPlr    = server.maxPlayers
 
-        -- ❗️JANGAN pilih server sendiri
-        if sid ~= currentJob then
-            local notFull    = playing < maxPlr
-            local inMain     = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
-            local inBackup   = playing >= CONFIG.BackupMinPlayers  -- minimal 2 pemain
-            local notVisited = (not CONFIG.RememberVisited) or (not visited[sid])
+        local notFull        = playing < maxPlr
+        local inMainRange    = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
+        local inBackupRange  = playing >= CONFIG.BackupMinPlayers   -- minimal 2 pemain
+        local notVisited     = (not CONFIG.RememberVisited) or (not visited[sid])
+        local notSameServer  = sid ~= currentJob
 
-            if notFull and notVisited then
-                local info = {
-                    id      = sid,
-                    playing = playing,
-                    max     = maxPlr,
-                    score   = 0,
-                }
+        if notFull and notVisited and notSameServer then
+            local info = {
+                id      = sid,
+                playing = playing,
+                max     = maxPlr,
+                score   = 0,
+            }
 
-                -- Skor: makin dekat ke tengah range utama, makin bagus
-                local mid = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
-                local dist = math.abs(playing - mid)
-                info.score = -dist + math.random()
+            local mid  = (CONFIG.MinPlayers + CONFIG.MaxPlayers) / 2
+            local dist = math.abs(playing - mid)
+            info.score = -dist + math.random()
 
-                if inMain then
-                    table.insert(candidates, info)
-                elseif inBackup then
-                    table.insert(backups, info)
-                end
+            if inMainRange then
+                table.insert(candidates, info)
+            elseif inBackupRange then
+                table.insert(backups, info)
             end
         end
     end
@@ -266,7 +266,7 @@ local target = pickBest(candidates)
 
 if not target then
     if #backups > 0 then
-        warn(("[ServerHop] Tidak ada server %d–%d pemain, pakai server cadangan (≥%d pemain).")
+        warn(("[ServerHop] Tidak ada server pas %d–%d pemain, pakai server cadangan (≥%d pemain).")
             :format(CONFIG.MinPlayers, CONFIG.MaxPlayers, CONFIG.BackupMinPlayers))
         target = pickBest(backups)
     else
