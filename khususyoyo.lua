@@ -1,4 +1,4 @@
---==[ ADVANCED SERVER HOPPER – NO 1 PLAYER BACKUP ]==--
+--==[ ADVANCED SERVER HOPPER – LAST RESORT RANDOM HOP ]==--
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -13,7 +13,7 @@ local CONFIG = {
     MaxPlayers         = 7,   -- maksimal pemain di server tujuan
 
     -- RANGE CADANGAN (kalau tidak ada yang masuk range utama)
-    BackupMinPlayers   = 2,   -- server cadangan minimal 2 pemain (tidak akan 1 pemain)
+    BackupMinPlayers   = 2,   -- server cadangan minimal 2 pemain (tidak 1 pemain)
 
     MaxPagesToScan     = 6,   -- maksimal halaman server yang discan
     RandomStartPage    = true,-- mulai dari page acak
@@ -30,7 +30,7 @@ local HttpService     = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local placeId     = game.PlaceId
-local currentJob  = game.JobId   -- <== BIAR NGGAK PILIH SERVER YANG SAMA
+local currentJob  = game.JobId
 
 math.randomseed(os.time())
 
@@ -115,7 +115,7 @@ do
     if not ok then
         HTTP_OK = false
         warn("[ServerHop] HTTP ke games.roblox.com diblokir oleh executor / device.")
-        warn("[ServerHop] Pindah ke mode sederhana: rejoin biasa.")
+        warn("[ServerHop] Mode simple saja (tanpa server list).")
     else
         local okDecode = pcall(function()
             HttpService:JSONDecode(res)
@@ -128,7 +128,7 @@ do
 end
 
 ----------------------------------------------------------------
--- 🪂 Mode simple (kalau HTTP tidak bisa)
+-- 🪂 Mode simple (kalau HTTP tidak bisa sama sekali)
 ----------------------------------------------------------------
 local function SimpleRejoin()
     warn("[ServerHop] Mode simple aktif (tanpa server list). Rejoin place saja.")
@@ -200,13 +200,10 @@ print(("[ServerHop] Target server: %d–%d pemain"):format(CONFIG.MinPlayers, CO
 
 ----------------------------------------------------------------
 -- 🔎 Kumpulkan kandidat server
---     - tidak penuh
---     - jumlah pemain di range
---     - belum pernah dikunjungi
---     - BUKAN JobId server sekarang
 ----------------------------------------------------------------
-local candidates = {}
-local backups    = {}
+local candidates = {}  -- sesuai range utama
+local backups    = {}  -- minimal BackupMinPlayers
+local anyServers = {}  -- last resort: server apa saja selain JobId sekarang
 
 local function pickBest(list)
     if #list == 0 then return nil end
@@ -228,11 +225,22 @@ for page = 1, CONFIG.MaxPagesToScan do
         local playing   = server.playing
         local maxPlr    = server.maxPlayers
 
-        local notFull        = playing < maxPlr
-        local inMainRange    = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
-        local inBackupRange  = playing >= CONFIG.BackupMinPlayers   -- minimal 2 pemain
-        local notVisited     = (not CONFIG.RememberVisited) or (not visited[sid])
-        local notSameServer  = sid ~= currentJob
+        -- kumpulkan semua server (selama bukan jobid yang sama) untuk last resort
+        if sid ~= currentJob then
+            table.insert(anyServers, {
+                id      = sid,
+                playing = playing,
+                max     = maxPlr,
+                score   = math.random(), -- random saja untuk last resort
+            })
+        end
+
+        -- filter untuk kandidat utama + cadangan
+        local notFull       = playing < maxPlr
+        local inMainRange   = playing >= CONFIG.MinPlayers and playing <= CONFIG.MaxPlayers
+        local inBackupRange = playing >= CONFIG.BackupMinPlayers
+        local notVisited    = (not CONFIG.RememberVisited) or (not visited[sid])
+        local notSameServer = sid ~= currentJob
 
         if notFull and notVisited and notSameServer then
             local info = {
@@ -270,9 +278,15 @@ if not target then
             :format(CONFIG.MinPlayers, CONFIG.MaxPlayers, CONFIG.BackupMinPlayers))
         target = pickBest(backups)
     else
-        warn("[ServerHop] Tidak ada server lain yang bisa dimasuki (advanced). Rejoin biasa.")
-        SimpleRejoin()
-        return
+        -- LAST RESORT: pilih server sembarang (asal bukan jobid sekarang)
+        if #anyServers > 0 then
+            warn("[ServerHop] Tidak ada server sesuai kriteria, pilih server acak (last resort).")
+            -- bisa pakai pickBest(anyServers) atau cuma random
+            target = anyServers[math.random(1, #anyServers)]
+        else
+            warn("[ServerHop] Hanya ada 1 server publik (server ini). Tidak bisa hop ke server lain.")
+            return
+        end
     end
 end
 
